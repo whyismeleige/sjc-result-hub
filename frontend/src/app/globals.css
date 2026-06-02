@@ -1,0 +1,386 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Outfit:wght@300;400;500;600;700;800;900&family=Syne:wght@400;500;600;700;800&display=swap');
+
+@import "tailwindcss";
+
+/* ──────────────────────────────────────────────────────────
+   THEME TOKENS
+────────────────────────────────────────────────────────── */
+:root {
+  --font-display: 'Syne', system-ui, sans-serif;
+  --font-sans: 'Outfit', system-ui, sans-serif;
+  --font-mono: 'DM Mono', monospace;
+
+  /* Surfaces */
+  --bg-base: #0b0e13;
+  --bg-elevated: #11141a;
+  --bg-overlay: #151820;
+
+  --border-base: rgba(255, 255, 255, 0.07);
+  --border-hover: rgba(255, 255, 255, 0.13);
+
+  /* Text */
+  --text-primary: #e8ecf1;
+  --text-secondary: #9aa3b2;
+  --text-muted: #636e7d;
+  --text-inverse: #0b0e13;
+
+  /* Brand */
+  --brand: #1aad9e;
+  --brand-light: #37c9b8;
+  --brand-dark: #128b80;
+  --brand-glow: rgba(26, 173, 158, 0.2);
+
+  /* Status */
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #f43f5e;
+  --info: #0ea5e9;
+
+  /* Scrollbar */
+  --scrollbar-track: #11141a;
+  --scrollbar-thumb: #2a3040;
+}
+
+/* ──────────────────────────────────────────────────────────
+   BASE RESET
+────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ──────────────────────────────────────────────────────────
+   TYPOGRAPHY
+────────────────────────────────────────────────────────── */
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+/* ──────────────────────────────────────────────────────────
+   SCROLLBAR
+────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a4560;
+}
+
+/* ──────────────────────────────────────────────────────────
+   COMPONENTS
+────────────────────────────────────────────────────────── */
+@layer components {
+  /* Cards */
+  .card {
+    @apply bg-[var(--bg-elevated)] border border-white/[0.07] rounded-xl;
+  }
+
+  .card-hover {
+    @apply bg-[var(--bg-elevated)]
+           border border-white/[0.07]
+           rounded-xl
+           transition-all
+           duration-200
+           hover:border-[var(--brand)]
+           hover:shadow-lg;
+  }
+
+  .glass {
+    @apply bg-white/[0.03]
+           backdrop-blur-sm
+           border
+           border-white/[0.07]
+           rounded-xl;
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    @apply bg-gradient-to-r
+           from-teal-300
+           via-teal-400
+           to-sky-400
+           bg-clip-text
+           text-transparent;
+  }
+
+  /* Stat cards */
+  .stat-card {
+    @apply bg-[var(--bg-elevated)]
+           border
+           border-white/[0.07]
+           rounded-xl
+           p-4
+           flex
+           flex-col
+           gap-1;
+  }
+
+  /* Tables */
+  .data-table {
+    @apply w-full text-sm;
+  }
+
+  .data-table thead tr {
+    @apply border-b border-white/[0.07];
+  }
+
+  .data-table thead th {
+    @apply text-left
+           text-[var(--text-muted)]
+           font-medium
+           py-3
+           px-4
+           text-xs
+           uppercase
+           tracking-wider;
+  }
+
+  .data-table tbody tr {
+    @apply border-b
+           border-white/[0.04]
+           hover:bg-white/[0.02]
+           transition-colors;
+  }
+
+  .data-table tbody td {
+    @apply py-3 px-4 text-[var(--text-primary)];
+  }
+
+  /* Badges */
+  .badge {
+    @apply inline-flex
+           items-center
+           px-2
+           py-0.5
+           rounded-md
+           text-xs
+           font-medium;
+    font-family: var(--font-mono);
+  }
+
+  /* Buttons */
+  .btn-primary {
+    @apply inline-flex
+           items-center
+           gap-2
+           px-4
+           py-2
+           rounded-lg
+           font-medium
+           text-sm
+           text-white
+           transition-all
+           duration-150
+           active:scale-[0.98]
+           shadow-md;
+
+    background-color: var(--brand);
+  }
+
+  .btn-primary:hover {
+    background-color: var(--brand-light);
+    box-shadow: 0 0 24px var(--brand-glow);
+  }
+
+  .btn-secondary {
+    @apply inline-flex
+           items-center
+           gap-2
+           px-4
+           py-2
+           rounded-lg
+           font-medium
+           text-sm
+           transition-all
+           duration-150
+           active:scale-[0.98]
+           border
+           border-white/[0.07]
+           hover:border-white/[0.15];
+
+    background-color: var(--bg-overlay);
+    color: var(--text-primary);
+  }
+
+  .btn-secondary:hover {
+    background-color: rgba(255, 255, 255, 0.04);
+  }
+
+  .btn-ghost {
+    @apply inline-flex
+           items-center
+           gap-2
+           px-4
+           py-2
+           rounded-lg
+           font-medium
+           text-sm
+           transition-all
+           duration-150
+           active:scale-[0.98];
+    color: var(--text-secondary);
+  }
+
+  .btn-ghost:hover {
+    @apply bg-white/[0.05];
+    color: var(--text-primary);
+  }
+
+  /* Inputs */
+  .input {
+    @apply w-full
+           rounded-lg
+           px-4
+           py-2.5
+           text-sm
+           outline-none
+           transition-all
+           duration-150
+           border;
+
+    background-color: var(--bg-overlay);
+    border-color: rgba(255, 255, 255, 0.09);
+    color: var(--text-primary);
+  }
+
+  .input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .input:focus {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 1px var(--brand-glow);
+  }
+
+  /* Skeleton */
+  .skeleton {
+    @apply rounded animate-pulse;
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.04) 25%,
+      rgba(255, 255, 255, 0.08) 50%,
+      rgba(255, 255, 255, 0.04) 75%
+    );
+    background-size: 200% 100%;
+  }
+
+  /* Accent line */
+  .glow-line {
+    height: 1px;
+    background: linear-gradient(
+      to right,
+      transparent,
+      rgba(26, 173, 158, 0.5),
+      transparent
+    );
+  }
+
+  /* Rank styles */
+  .rank-1 {
+    @apply text-amber-400 font-bold;
+  }
+
+  .rank-2 {
+    @apply text-gray-300 font-bold;
+  }
+
+  .rank-3 {
+    @apply text-amber-700 font-bold;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────
+   ANIMATIONS
+────────────────────────────────────────────────────────── */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeInUp {
+  animation: fadeInUp 0.35s ease-out forwards;
+}
+
+.stagger-1 {
+  animation-delay: 0.05s;
+}
+
+.stagger-2 {
+  animation-delay: 0.1s;
+}
+
+.stagger-3 {
+  animation-delay: 0.15s;
+}
+
+.stagger-4 {
+  animation-delay: 0.2s;
+}
+
+.stagger-5 {
+  animation-delay: 0.25s;
+}
+
+/* ──────────────────────────────────────────────────────────
+   PAGE TRANSITIONS
+────────────────────────────────────────────────────────── */
+.page-enter {
+  animation: fadeInUp 0.3s ease-out;
+}
+
+/* ──────────────────────────────────────────────────────────
+   RECHARTS OVERRIDES
+────────────────────────────────────────────────────────── */
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: var(--bg-overlay) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 8px !important;
+  color: var(--text-primary) !important;
+  font-family: var(--font-sans) !important;
+}
+
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: rgba(255, 255, 255, 0.05) !important;
+}
+
+.recharts-text {
+  fill: var(--text-muted) !important;
+}

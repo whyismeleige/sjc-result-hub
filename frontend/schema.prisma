@@ -1,0 +1,64 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Student {
+  id           Int        @id @default(autoincrement())
+  hall_ticket  String     @unique @db.VarChar(20)
+  student_name String     @db.VarChar(255)
+  father_name  String?    @db.VarChar(255)
+  mother_name  String?    @db.VarChar(255)
+  program      String?    @db.VarChar(255)
+  created_at   DateTime   @default(now())
+  semesters    Semester[]
+
+  @@index([hall_ticket])
+  @@map("students")
+}
+
+model Semester {
+  id              Int               @id @default(autoincrement())
+  student_id      Int
+  semester_name   String            @db.VarChar(100)
+  exam_month_year String            @db.VarChar(50)
+  sgpa            String?           @db.VarChar(10)
+  overall_result  String?           @db.VarChar(50)
+  created_at      DateTime          @default(now())
+  student         Student           @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  results         SemesterResult[]
+
+  @@index([student_id])
+  @@map("semesters")
+}
+
+model Subject {
+  id           Int              @id @default(autoincrement())
+  course_code  String           @unique @db.VarChar(50)
+  course_title String           @db.Text
+  credits      Int?
+  results      SemesterResult[]
+
+  @@map("subjects")
+}
+
+model SemesterResult {
+  id             Int      @id @default(autoincrement())
+  semester_id    Int
+  subject_id     Int
+  grade          String?  @db.VarChar(10)
+  subject_result String?  @db.VarChar(20)
+  month_year     String?  @db.VarChar(50)
+  semester       Semester @relation(fields: [semester_id], references: [id], onDelete: Cascade)
+  subject        Subject  @relation(fields: [subject_id], references: [id])
+
+  @@unique([semester_id, subject_id])
+  @@index([semester_id])
+  @@map("semester_results")
+}
