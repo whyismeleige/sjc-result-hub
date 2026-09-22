@@ -2,11 +2,18 @@
 import { NextRequest } from 'next/server';
 import { Prisma } from '@prisma/client';
 import prisma from '@/lib/prisma';
-import { ok, err, parseQuery, searchSchema, paginate, getPrismaSkip, rateLimit, getClientIp } from '@/lib/api';
+import {
+  ok, err, parseQuery, searchSchema, paginate, getPrismaSkip,
+  rateLimit, getClientIp, isAdminRequest,
+} from '@/lib/api';
 
+export const runtime = 'nodejs';
+
+// List responses intentionally EXCLUDE parent names (PII); /detail and /export
+// are the only endpoints allowed to return father/mother info.
 export async function GET(req: NextRequest) {
   const ip = getClientIp(req);
-  const { ok: allowed } = rateLimit(ip, 60, 60_000);
+  const { ok: allowed } = await rateLimit(ip, 60, 60_000, isAdminRequest(req));
   if (!allowed) return err('Rate limit exceeded', 429);
 
   const parsed = parseQuery(req, searchSchema);
@@ -39,7 +46,6 @@ export async function GET(req: NextRequest) {
           hall_ticket: true,
           student_name: true,
           program: true,
-          father_name: true,
           created_at: true,
         },
       }),

@@ -19,7 +19,7 @@ interface Subject  { id: number; course_code: string; course_title: string; cred
 interface SemResult{ id: number; grade: string | null; subject_result: string | null; subject: Subject; }
 interface Semester  {
   id: number; semester_name: string; exam_month_year: string;
-  sgpa: string | null; overall_result: string | null;
+  sgpa: number | null; overall_result: string | null; source_run_id: number | null;
   results: SemResult[];
 }
 interface Student {

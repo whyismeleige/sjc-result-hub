@@ -1,36 +1,76 @@
 // src/lib/api.ts
+//
+// Shared helpers for API routes: Prisma-backed rate limiting, request IP
+// extraction, response shaping, Zod query parsing, and Decimal normalization.
 import { NextRequest, NextResponse } from 'next/server';
 import { z, ZodSchema } from 'zod';
+import prisma from './prisma';
 
-// ─── Rate limiting (in-memory, per-IP) ─────────────────────────────────────
-const rateMap = new Map<string, { count: number; resetAt: number }>();
+// ─── Rate limiting (Prisma/Postgres backed) ──────────────────────────────
+// Uses `rate_limit_entries` table. Each (ip + window) is a row; counts are
+// incremented atomically via upsert so it is correct on Vercel's stateless
+// serverless functions where an in-memory Map would reset per instance.
+//
+// Buckets expire as windows advance; an opportunistic batch cleanup keeps the
+// table small. Rate limiting FAILS OPEN (a DB hiccup must never brick the site).
 
-export function rateLimit(
+const RATE_LIMIT_CLEANUP_THRESHOLD_MS = 3600_000; // keep ~1h of history
+const RATE_LIMIT_MAX_WINDOW_MS = 3600_000;
+
+export type RateLimitResult = { ok: true; remaining: number } | { ok: false; remaining: 0 };
+
+export async function rateLimit(
   ip: string,
   limit = 60,
-  windowMs = 60_000
-): { ok: boolean; remaining: number } {
-  const now = Date.now();
-  const entry = rateMap.get(ip);
-
-  if (!entry || now > entry.resetAt) {
-    rateMap.set(ip, { count: 1, resetAt: now + windowMs });
-    return { ok: true, remaining: limit - 1 };
+  windowMs = 60_000,
+  bypass = false
+): Promise<RateLimitResult> {
+  if (bypass) return { ok: true, remaining: limit };
+  const windowStart = Math.floor(Date.now() / windowMs) * windowMs;
+  const key = `rl:${ip}:${windowStart}`;
+  try {
+    const entry = await prisma.rateLimitEntry.upsert({
+      where: { key },
+      create: { key, windowStart: new Date(windowStart), count: 1 },
+      update: { count: { increment: 1 } },
+    });
+    if (suppressWindow(windowMs)) {
+      void prisma.rateLimitEntry
+        .deleteMany({
+          where: { windowStart: { lt: new Date(Date.now() - RATE_LIMIT_CLEANUP_THRESHOLD_MS) } },
+        })
+        .catch(() => {});
+    }
+    if (entry.count > limit) return { ok: false, remaining: 0 };
+    return { ok: true, remaining: Math.max(0, limit - entry.count) };
+  } catch {
+    return { ok: true, remaining: limit };
   }
-
-  entry.count += 1;
-  if (entry.count > limit) {
-    return { ok: false, remaining: 0 };
-  }
-  return { ok: true, remaining: limit - entry.count };
 }
 
+// ~1 in 1000 requests triggers cleanup; never blocks a client request.
+function suppressWindow(windowMs: number): boolean {
+  if (windowMs > RATE_LIMIT_MAX_WINDOW_MS) return false;
+  return Math.random() < 0.001;
+}
+
+/**
+ * Best-effort client IP extraction.
+ * Priority: x-real-ip (set by nginx/Vercel), x-vercel-forwarded-for,
+ * then the first hop of x-forwarded-for. All input is length-capped.
+ * Falls back to a private literal so rate limiting still functions locally.
+ */
 export function getClientIp(req: NextRequest): string {
-  return (
-    req.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
-    req.headers.get('x-real-ip') ||
-    '127.0.0.1'
-  );
+  const candidates = [
+    req.headers.get('x-real-ip'),
+    req.headers.get('x-vercel-forwarded-for'),
+    req.headers.get('x-forwarded-for')?.split(',')[0].trim(),
+    '127.0.0.1',
+  ];
+  for (const ip of candidates) {
+    if (ip && /^[\w.:\-\[\]]{1,64}$/.test(ip)) return ip;
+  }
+  return '127.0.0.1';
 }
 
 // ─── Response helpers ────────────────────────────────────────────────────────
@@ -89,15 +129,36 @@ export const leaderboardSchema = paginationSchema.extend({
 });
 
 // ─── Admin auth middleware ───────────────────────────────────────────────────
+/**
+ * A request counts as admin when it presents the configured `ADMIN_SECRET`,
+ * either via the `x-admin-secret` header or the `admin_secret` query param.
+ * Returns false when `ADMIN_SECRET` is unset (admin features are disabled).
+ */
+export function isAdminRequest(req: NextRequest): boolean {
+  const secret = process.env.ADMIN_SECRET;
+  if (!secret) return false;
+  const provided =
+    req.headers.get('x-admin-secret') || req.nextUrl.searchParams.get('admin_secret');
+  return typeof provided === 'string' && provided.length > 0 && provided === secret;
+}
+
 export function requireAdmin(req: NextRequest): NextResponse | null {
-  const secret = req.headers.get('x-admin-secret');
-  if (secret !== process.env.ADMIN_SECRET) {
-    return err('Unauthorized', 401);
-  }
-  return null;
+  return isAdminRequest(req) ? null : err('Unauthorized', 401);
 }
 
 // ─── Prisma pagination helpers ───────────────────────────────────────────────
 export function getPrismaSkip(page: number, limit: number) {
   return (page - 1) * limit;
+}
+
+// ─── Decimal normalization ───────────────────────────────────────────────────
+/**
+ * Prisma serializes Postgres DECIMAL columns to strings in JSON. This normalizes
+ * a Prisma Decimal (or string/number) to a JS number for API responses, or null
+ * when the value is absent/unparseable.
+ */
+export function toNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }

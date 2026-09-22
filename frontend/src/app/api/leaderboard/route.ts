@@ -1,11 +1,13 @@
 // src/app/api/leaderboard/route.ts
 import { NextRequest } from 'next/server';
+import { Prisma } from '@prisma/client';
 import prisma from '@/lib/prisma';
 import {
   ok, err, parseQuery, leaderboardSchema,
-  paginate, getPrismaSkip, rateLimit, getClientIp
+  paginate, getPrismaSkip, rateLimit, getClientIp, isAdminRequest, toNumber,
 } from '@/lib/api';
-import { Prisma } from '@prisma/client';
+
+export const runtime = 'nodejs';
 
 type SemesterWhere = Prisma.SemesterWhereInput;
 
@@ -26,7 +28,7 @@ function buildWhere(params: {
 
   if (program) {
     where.student = {};
-    if (program) where.student.program = ci(program);
+    where.student.program = ci(program);
   }
 
   return where;
@@ -46,7 +48,7 @@ const semesterSelectBrief = {
 
 export async function GET(req: NextRequest) {
   const ip = getClientIp(req);
-  const { ok: allowed } = rateLimit(ip, 60, 60_000);
+  const { ok: allowed } = await rateLimit(ip, 60, 60_000, isAdminRequest(req));
   if (!allowed) return err('Rate limit exceeded', 429);
 
   const parsed = parseQuery(req, leaderboardSchema);
@@ -57,8 +59,7 @@ export async function GET(req: NextRequest) {
 
   try {
     if (type === 'sgpa' || type === 'semester') {
-      const where = buildWhere({ program, semester, examMonthYear });
-      where.sgpa = { not: null };
+      const where = buildWhere({ program, semester, examMonthYear, sgpaRequired: true });
       where.overall_result = 'PASS';
 
       const [rows, total] = await Promise.all([
@@ -76,7 +77,7 @@ export async function GET(req: NextRequest) {
         rows.map((r, i) => ({
           rank: skip + i + 1,
           student: r.student,
-          sgpa: r.sgpa ? parseFloat(r.sgpa) : null,
+          sgpa: toNumber(r.sgpa),
           semester_name: r.semester_name,
           exam_month_year: r.exam_month_year,
         })),
@@ -85,40 +86,55 @@ export async function GET(req: NextRequest) {
     }
 
     if (type === 'branch') {
-      const programWhere = program ? { program: { contains: program, mode: 'insensitive' as const } } : {};
-      const programs = await prisma.student.groupBy({
+      // One-pass aggregation instead of a query per program.
+      const semesterPart = semester
+        ? Prisma.sql` AND s.semester_name ILIKE ${'%' + semester + '%'}`
+        : Prisma.empty;
+      const examPart = examMonthYear
+        ? Prisma.sql` AND s.exam_month_year ILIKE ${'%' + examMonthYear + '%'}`
+        : Prisma.empty;
+      const programPart = program
+        ? Prisma.sql` AND st.program ILIKE ${'%' + program + '%'}`
+        : Prisma.empty;
+
+      const raw = await prisma.$queryRaw<
+        Array<{
+          program: string | null;
+          semesters: number;
+          passCount: number;
+          avgSgpa: number;
+          topSgpa: number;
+        }>
+      >`
+        SELECT st.program AS "program",
+               count(*)::int AS "semesters",
+               count(*) FILTER (WHERE s.overall_result = 'PASS')::int AS "passCount",
+               round(avg(s.sgpa), 4)::float AS "avgSgpa",
+               max(s.sgpa)::float AS "topSgpa"
+        FROM semesters s
+        JOIN students st ON st.id = s.student_id
+        WHERE s.sgpa IS NOT NULL
+          ${semesterPart}${examPart}${programPart}
+        GROUP BY st.program
+        ORDER BY "avgSgpa" DESC`;
+
+      // Full program enrollment counts (all students, not only those with SGPA).
+      const programCounts = await prisma.student.groupBy({
         by: ['program'],
-        where: programWhere,
         _count: { id: true },
+        where: program ? { program: { contains: program, mode: 'insensitive' as const } } : {},
       });
+      const countByProgram = new Map(programCounts.map(p => [p.program, p._count.id]));
 
-      const branchStats = await Promise.all(
-        programs.map(async p => {
-          const semWhere = buildWhere({ program: p.program ?? undefined, semester, examMonthYear, sgpaRequired: true });
-          const sems = await prisma.semester.findMany({
-            where: semWhere,
-            select: { sgpa: true, overall_result: true },
-          });
+      const branchStats = raw.map(r => ({
+        program: r.program ?? 'Unknown',
+        studentCount: countByProgram.get(r.program) ?? 0,
+        avgSgpa: Number(r.avgSgpa.toFixed(2)),
+        passRate: r.semesters ? Math.round((r.passCount / r.semesters) * 100) : 0,
+        topSgpa: Number(r.topSgpa.toFixed(2)),
+      }));
 
-          const sgpas = sems.map(s => parseFloat(s.sgpa!)).filter(n => !isNaN(n));
-          const avgSgpa = sgpas.length ? sgpas.reduce((a, b) => a + b, 0) / sgpas.length : 0;
-          const passCount = sems.filter(s => s.overall_result === 'PASS').length;
-          const passRate = sems.length ? Math.round((passCount / sems.length) * 100) : 0;
-
-          return {
-            program: p.program ?? 'Unknown',
-            studentCount: p._count.id,
-            avgSgpa: parseFloat(avgSgpa.toFixed(2)),
-            passRate,
-            topSgpa: sgpas.length ? Math.max(...sgpas) : 0,
-          };
-        })
-      );
-
-      const sorted = branchStats
-        .sort((a, b) => b.avgSgpa - a.avgSgpa)
-        .map((b, i) => ({ rank: i + 1, ...b }));
-
+      const sorted = branchStats.map((b, i) => ({ rank: i + 1, ...b }));
       return ok(sorted.slice(skip, skip + limit), paginate(page, limit, sorted.length));
     }
 

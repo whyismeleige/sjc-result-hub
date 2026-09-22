@@ -1,11 +1,13 @@
 // src/app/api/leaderboard/filters/route.ts
 import { NextRequest } from 'next/server';
 import prisma from '@/lib/prisma';
-import { ok, err, rateLimit, getClientIp } from '@/lib/api';
+import { ok, err, rateLimit, getClientIp, isAdminRequest } from '@/lib/api';
+
+export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
   const ip = getClientIp(req);
-  const { ok: allowed } = rateLimit(ip, 120, 60_000);
+  const { ok: allowed } = await rateLimit(ip, 120, 60_000, isAdminRequest(req));
   if (!allowed) return err('Rate limit exceeded', 429);
 
   try {

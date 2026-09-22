@@ -6,10 +6,10 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/** Parse SGPA string to float safely */
-export function parseGPA(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const parsed = parseFloat(value);
+/** Parse SGPA (string, number, or Prisma Decimal) safely to float */
+export function parseGPA(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = typeof value === 'number' ? value : parseFloat(value);
   return isNaN(parsed) ? null : parsed;
 }
 
@@ -124,4 +124,9 @@ export function extractStream(program: string | null): string {
   if (program.includes('B.A') || program.includes('BA ')) return 'B.A';
   if (program.includes('B.SC') || program.includes('BSC')) return 'B.Sc';
   return program.split(' ')[0] || 'Other';
+}
+
+/** Neutralize spreadsheet formula injection in CSV cells. */
+export function sanitizeCsvCell(value: string): string {
+  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
 }

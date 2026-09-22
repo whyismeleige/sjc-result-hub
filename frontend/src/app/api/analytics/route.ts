@@ -1,8 +1,12 @@
 // src/app/api/analytics/route.ts
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import prisma from '@/lib/prisma';
-import { ok, err, parseQuery, rateLimit, getClientIp } from '@/lib/api';
+import { ok, err, parseQuery, rateLimit, getClientIp, isAdminRequest, toNumber } from '@/lib/api';
+import { bucketSgpas } from '@/lib/sgpa';
+
+export const runtime = 'nodejs';
 
 const analyticsSchema = z.object({
   type: z.enum([
@@ -13,9 +17,11 @@ const analyticsSchema = z.object({
   semester: z.string().max(50).optional(),
 });
 
+const ci = (val: string) => ({ contains: val, mode: 'insensitive' as const });
+
 export async function GET(req: NextRequest) {
   const ip = getClientIp(req);
-  const { ok: allowed } = rateLimit(ip, 30, 60_000);
+  const { ok: allowed } = await rateLimit(ip, 30, 60_000, isAdminRequest(req));
   if (!allowed) return err('Rate limit exceeded', 429);
 
   const parsed = parseQuery(req, analyticsSchema);
@@ -24,24 +30,25 @@ export async function GET(req: NextRequest) {
 
   try {
     if (type === 'overview') {
-      const [totalStudents, totalSemesters, totalSubjects, passCount, totalWithResult] =
+      const [totalStudents, totalSemesters, totalSubjects, passCount, promotedCount, failCount, totalWithResult] =
         await Promise.all([
           prisma.student.count(),
           prisma.semester.count(),
           prisma.subject.count(),
           prisma.semester.count({ where: { overall_result: 'PASS' } }),
+          prisma.semester.count({ where: { overall_result: 'PROMOTED' } }),
+          prisma.semester.count({ where: { overall_result: 'FAIL' } }),
           prisma.semester.count({ where: { overall_result: { not: null } } }),
         ]);
-
-      const promotedCount = await prisma.semester.count({ where: { overall_result: 'PROMOTED' } });
-      const failCount     = await prisma.semester.count({ where: { overall_result: 'FAIL' } });
 
       const topSgpa = await prisma.semester.findFirst({
         where: { sgpa: { not: null } },
         orderBy: { sgpa: 'desc' },
         select: {
           sgpa: true,
-          student: { select: { student_name: true, hall_ticket: true } },
+          semester_name: true,
+          exam_month_year: true,
+          student: { select: { id: true, student_name: true, hall_ticket: true, program: true } },
         },
       });
 
@@ -51,35 +58,10 @@ export async function GET(req: NextRequest) {
         orderBy: { _count: { id: 'desc' } },
       });
 
-      const branchDistribution = programs.map(p => ({
-        program: p.program ?? 'Unknown',
-        studentCount: p._count.id,
-      }));
-
       const sgpaSems = await prisma.semester.findMany({
         where: { sgpa: { not: null } },
         select: { sgpa: true },
       });
-
-      const sgpaBuckets: Record<string, number> = {
-        '9.0-10.0': 0, '8.0-8.9': 0, '7.0-7.9': 0,
-        '6.0-6.9': 0, '5.0-5.9': 0, '0-4.9': 0,
-      };
-      for (const s of sgpaSems) {
-        const val = parseFloat(s.sgpa!);
-        if (isNaN(val)) continue;
-        if (val >= 9.0) sgpaBuckets['9.0-10.0']++;
-        else if (val >= 8.0) sgpaBuckets['8.0-8.9']++;
-        else if (val >= 7.0) sgpaBuckets['7.0-7.9']++;
-        else if (val >= 6.0) sgpaBuckets['6.0-6.9']++;
-        else if (val >= 5.0) sgpaBuckets['5.0-5.9']++;
-        else sgpaBuckets['0-4.9']++;
-      }
-      const sgpaDistribution = Object.entries(sgpaBuckets).map(([range, count]) => ({
-        range,
-        count,
-        percentage: sgpaSems.length > 0 ? Math.round((count / sgpaSems.length) * 1000) / 10 : 0,
-      }));
 
       return ok({
         totalStudents,
@@ -89,46 +71,75 @@ export async function GET(req: NextRequest) {
         promotedCount,
         failCount,
         passRate: totalWithResult > 0 ? Math.round((passCount / totalWithResult) * 100) : 0,
-        topSgpa,
-        branchDistribution,
-        sgpaDistribution,
+        topSgpa: topSgpa
+          ? {
+              ...topSgpa,
+              sgpa: toNumber(topSgpa.sgpa),
+              student: { ...topSgpa.student, id: topSgpa.student.id },
+            }
+          : null,
+        branchDistribution: programs.map(p => ({
+          program: p.program ?? 'Unknown',
+          studentCount: p._count.id,
+        })),
+        sgpaDistribution: bucketSgpas(sgpaSems.map(s => toNumber(s.sgpa) ?? 0)),
       });
     }
 
     if (type === 'branch-performance') {
+      // Single-pass aggregation avoids querying per-program in a loop.
+      const programPart = program
+        ? Prisma.sql` AND st.program ILIKE ${'%' + program + '%'}`
+        : Prisma.empty;
+      const raw = await prisma.$queryRaw<
+        Array<{
+          program: string | null;
+          semesters: number;
+          passCount: number;
+          avgSgpa: number;
+          topSgpa: number;
+        }>
+      >`
+        SELECT st.program AS "program",
+               count(s.id)::int AS "semesters",
+               count(s.id) FILTER (WHERE s.overall_result = 'PASS')::int AS "passCount",
+               round(avg(s.sgpa), 4)::float AS "avgSgpa",
+               max(s.sgpa)::float AS "topSgpa"
+        FROM semesters s
+        JOIN students st ON st.id = s.student_id
+        WHERE s.sgpa IS NOT NULL
+          ${programPart}
+        GROUP BY st.program
+        ORDER BY "avgSgpa" DESC`;
+
       const programs = await prisma.student.groupBy({
         by: ['program'],
         _count: { id: true },
-        where: program ? { program: { contains: program, mode: 'insensitive' } } : {},
+        where: program ? { program: ci(program) } : {},
       });
+      const countByProgram = new Map(programs.map(p => [p.program, p._count.id]));
 
-      const stats = await Promise.all(
-        programs.map(async p => {
-          const sems = await prisma.semester.findMany({
-            where: { student: { program: p.program ?? '' }, sgpa: { not: null } },
-            select: { sgpa: true, overall_result: true },
-          });
-          const sgpas = sems.map(s => parseFloat(s.sgpa!)).filter(n => !isNaN(n));
-          const avgSgpa = sgpas.length ? sgpas.reduce((a, b) => a + b, 0) / sgpas.length : 0;
-          const passCount = sems.filter(s => s.overall_result === 'PASS').length;
-          return {
-            program: p.program ?? 'Unknown',
-            studentCount: p._count.id,
-            avgSgpa: parseFloat(avgSgpa.toFixed(2)),
-            passRate: sems.length ? Math.round((passCount / sems.length) * 100) : 0,
-            topSgpa: sgpas.length ? parseFloat(Math.max(...sgpas).toFixed(2)) : 0,
-          };
-        })
-      );
+      const stats = raw.map(r => ({
+        program: r.program ?? 'Unknown',
+        studentCount: countByProgram.get(r.program) ?? 0,
+        avgSgpa: Number(r.avgSgpa.toFixed(2)),
+        passRate: r.semesters ? Math.round((r.passCount / r.semesters) * 100) : 0,
+        topSgpa: Number(r.topSgpa.toFixed(2)),
+      }));
 
-      return ok(stats.sort((a, b) => b.avgSgpa - a.avgSgpa));
+      return ok(stats);
     }
 
     if (type === 'grade-distribution') {
-      const where = {
-        ...(program ? { semester: { student: { program: { contains: program, mode: 'insensitive' as const } } } } : {}),
-        ...(semester ? { semester: { semester_name: { contains: semester, mode: 'insensitive' as const } } } : {}),
-      };
+      // NOTE: previously the two spreads collapsed into one another, so passing
+      // both program AND semester silently dropped the semester filter.
+      const where: Record<string, unknown> = {};
+      if (program || semester) {
+        where.semester = {
+          ...(program ? { student: { program: ci(program) } } : {}),
+          ...(semester ? { semester_name: ci(semester) } : {}),
+        };
+      }
 
       const grades = await prisma.semesterResult.groupBy({
         by: ['grade'],
@@ -146,67 +157,42 @@ export async function GET(req: NextRequest) {
     }
 
     if (type === 'pass-rate') {
-      // Per-semester pass rates
-      const semesters = await prisma.semester.groupBy({
-        by: ['semester_name', 'exam_month_year'],
-        _count: { id: true },
-        orderBy: { exam_month_year: 'asc' },
-      });
+      // Single raw aggregation (avoids a count query per semester group).
+      const rows = await prisma.$queryRaw<
+        Array<{
+          semester_name: string;
+          exam_month_year: string;
+          total: number;
+          passCount: number;
+        }>
+      >`
+        SELECT semester_name, exam_month_year,
+               count(*)::int AS "total",
+               count(*) FILTER (WHERE overall_result = 'PASS')::int AS "passCount"
+        FROM semesters
+        GROUP BY semester_name, exam_month_year
+        ORDER BY exam_month_year ASC, semester_name ASC`;
 
-      const withRates = await Promise.all(
-        semesters.map(async s => {
-          const passCount = await prisma.semester.count({
-            where: {
-              semester_name: s.semester_name,
-              exam_month_year: s.exam_month_year,
-              overall_result: 'PASS',
-            },
-          });
-          return {
-            semester_name: s.semester_name,
-            exam_month_year: s.exam_month_year,
-            total: s._count.id,
-            passCount,
-            passRate: Math.round((passCount / s._count.id) * 100),
-          };
-        })
-      );
-
-      return ok(withRates);
+      return ok(rows.map(r => ({
+        semester_name: r.semester_name,
+        exam_month_year: r.exam_month_year,
+        total: r.total,
+        passCount: r.passCount,
+        passRate: r.total ? Math.round((r.passCount / r.total) * 100) : 0,
+      })));
     }
 
     if (type === 'sgpa-distribution') {
       const sems = await prisma.semester.findMany({
         where: {
           sgpa: { not: null },
-          ...(program ? { student: { program: { contains: program, mode: 'insensitive' } } } : {}),
+          ...(program ? { student: { program: ci(program) } } : {}),
+          ...(semester ? { semester_name: ci(semester) } : {}),
         },
         select: { sgpa: true },
       });
 
-      const buckets: Record<string, number> = {
-        '9.0-10.0': 0, '8.0-8.9': 0, '7.0-7.9': 0,
-        '6.0-6.9': 0, '5.0-5.9': 0, '0-4.9': 0,
-      };
-
-      for (const s of sems) {
-        const val = parseFloat(s.sgpa!);
-        if (isNaN(val)) continue;
-        if (val >= 9.0) buckets['9.0-10.0']++;
-        else if (val >= 8.0) buckets['8.0-8.9']++;
-        else if (val >= 7.0) buckets['7.0-7.9']++;
-        else if (val >= 6.0) buckets['6.0-6.9']++;
-        else if (val >= 5.0) buckets['5.0-5.9']++;
-        else buckets['0-4.9']++;
-      }
-
-      return ok(
-        Object.entries(buckets).map(([range, count]) => ({
-          range,
-          count,
-          percentage: sems.length > 0 ? Math.round((count / sems.length) * 1000) / 10 : 0,
-        }))
-      );
+      return ok(bucketSgpas(sems.map(s => toNumber(s.sgpa) ?? 0)));
     }
 
     return err('Unknown analytics type', 400);

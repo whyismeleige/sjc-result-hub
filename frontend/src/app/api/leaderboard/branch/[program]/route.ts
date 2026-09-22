@@ -1,25 +1,36 @@
 // src/app/api/leaderboard/branch/[program]/route.ts
 import { NextRequest } from 'next/server';
+import { z } from 'zod';
 import prisma from '@/lib/prisma';
-import { ok, err, paginate, getPrismaSkip, rateLimit, getClientIp } from '@/lib/api';
+import { ok, err, paginate, getPrismaSkip, rateLimit, getClientIp, isAdminRequest, toNumber } from '@/lib/api';
+
+export const runtime = 'nodejs';
+
+const branchQuerySchema = z.object({
+  semester: z.string().max(50).optional(),
+  examMonthYear: z.string().max(50).optional(),
+  search: z.string().max(100).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
 
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ program: string }> }
 ) {
   const ip = getClientIp(req);
-  const { ok: allowed } = rateLimit(ip, 60, 60_000);
+  const { ok: allowed } = await rateLimit(ip, 60, 60_000, isAdminRequest(req));
   if (!allowed) return err('Rate limit exceeded', 429);
 
   const { program } = await params;
   const programName = decodeURIComponent(program);
+  if (programName.length > 120) return err('Invalid program', 400);
 
-  const searchParams = req.nextUrl.searchParams;
-  const semester = searchParams.get('semester') || undefined;
-  const examMonthYear = searchParams.get('examMonthYear') || undefined;
-  const search = searchParams.get('search') || undefined;
-  const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
-  const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '20', 10)));
+  const parsed = branchQuerySchema.safeParse(
+    Object.fromEntries(req.nextUrl.searchParams.entries())
+  );
+  if (!parsed.success) return err('Invalid query parameters', 400, parsed.error.flatten());
+  const { semester, examMonthYear, search, page, limit } = parsed.data;
   const skip = getPrismaSkip(page, limit);
 
   try {
@@ -42,7 +53,7 @@ export async function GET(
       select: { sgpa: true, overall_result: true },
     });
 
-    const sgpas = allSems.map(s => parseFloat(s.sgpa!)).filter(n => !isNaN(n));
+    const sgpas = allSems.map(s => toNumber(s.sgpa) ?? 0);
     const avgSgpa = sgpas.length ? sgpas.reduce((a, b) => a + b, 0) / sgpas.length : 0;
     const passCount = allSems.filter(s => s.overall_result === 'PASS').length;
     const passRate = allSems.length ? Math.round((passCount / allSems.length) * 100) : 0;
@@ -63,7 +74,7 @@ export async function GET(
     for (const s of sems) {
       const key = s.semester_name;
       const existing = breakdownMap.get(key) || { sgpaList: [], passCount: 0, total: 0, exam_month_year: s.exam_month_year };
-      existing.sgpaList.push(parseFloat(s.sgpa!));
+      existing.sgpaList.push(toNumber(s.sgpa) ?? 0);
       if (s.overall_result === 'PASS') existing.passCount++;
       existing.total++;
       if (!breakdownMap.has(key)) breakdownMap.set(key, existing);
@@ -129,7 +140,7 @@ export async function GET(
       id: s.id,
       hall_ticket: s.hall_ticket,
       student_name: s.student_name,
-      sgpa: s.semesters[0] ? parseFloat(s.semesters[0].sgpa!) : null,
+      sgpa: s.semesters[0] ? toNumber(s.semesters[0].sgpa) : null,
       semester_name: s.semesters[0]?.semester_name ?? null,
       exam_month_year: s.semesters[0]?.exam_month_year ?? null,
     }));
@@ -139,7 +150,7 @@ export async function GET(
         program: programName,
         studentCount,
         avgSgpa: parseFloat(avgSgpa.toFixed(2)),
-        topSgpa,
+        topSgpa: parseFloat(topSgpa.toFixed(2)),
         passRate,
         semesterBreakdown,
         students: studentList,

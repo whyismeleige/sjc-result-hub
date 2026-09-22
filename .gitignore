@@ -1,0 +1,5 @@
+# Local database backups dumps (sensitive — never commit source data)
+/backups/
+
+# Migration / inspection reports produced by scripts/database
+/reports/

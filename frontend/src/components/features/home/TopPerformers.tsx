@@ -12,7 +12,7 @@ interface SemesterEntry {
   student_id: number;
   semester_name: string;
   exam_month_year: string;
-  sgpa: string | null;
+  sgpa: number | null;
   student: {
     student_name: string;
     hall_ticket: string;

@@ -1,0 +1,100 @@
+// Canonical production schema for SJC Result Hub.
+//
+// Database: Supabase PostgreSQL (also supported: any PostgreSQL 14+).
+// Connection:
+//   DATABASE_URL  -> pooled connection for runtime (Supabase connection pooler, port 6543)
+//   DIRECT_URL    -> direct connection for migrations/admin (Supabase port 5432)
+//
+// Naming note: column names use snake_case to match the pre-existing source data
+// that was migrated in from the legacy local database.
+//
+// SGPA is stored as DECIMAL(5,2), NOT text, so rankings/averages sort numerically.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+/// A student as scraped from the university portal.
+model Student {
+  id           Int       @id @default(autoincrement())
+  hall_ticket  String    @unique @db.VarChar(20)
+  student_name String    @db.VarChar(255)
+  // Parent names are preserved for data-retention purposes but are intentionally
+  // NOT exposed by the public list/search APIs.
+  father_name  String?   @db.VarChar(255)
+  mother_name  String?   @db.VarChar(255)
+  program      String?   @db.VarChar(255)
+  created_at   DateTime  @default(now()) @db.Timestamp(3)
+
+  semesters Semester[]
+
+  @@index([program])
+  @@map("students")
+}
+
+/// One exam period (semester take) for a student.
+model Semester {
+  id              Int              @id @default(autoincrement())
+  student_id      Int
+  semester_name   String           @db.VarChar(100) // e.g. SEMESTER-VI(REGULAR)
+  exam_month_year String           @db.VarChar(50)  // e.g. APRIL-2026
+  sgpa            Decimal?         @db.Decimal(5, 2)
+  overall_result  String?          @db.VarChar(50)  // PASS / FAIL / PROMOTED / ...
+  // Provenance: id of the scrape run this record came from (legacy scrape_runs.id).
+  source_run_id   Int?             @db.Integer
+  created_at      DateTime         @default(now()) @db.Timestamp(3)
+
+  student Student          @relation(fields: [student_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  results SemesterResult[]
+
+  @@unique([student_id, semester_name, exam_month_year])
+  @@index([student_id])
+  @@index([semester_name])
+  @@index([exam_month_year])
+  @@map("semesters")
+}
+
+/// A distinct course. Course codes are globally unique.
+model Subject {
+  id           Int              @id @default(autoincrement())
+  course_code  String           @unique @db.VarChar(50)
+  course_title String           @db.Text
+  credits      Int?
+
+  results SemesterResult[]
+
+  @@map("subjects")
+}
+
+/// A student's grade for one course within one semester take.
+model SemesterResult {
+  id             Int      @id @default(autoincrement())
+  semester_id    Int
+  subject_id     Int
+  grade          String?  @db.VarChar(10) // O / A+ / A / B+ / B / C / D / F / AB
+  subject_result String?  @db.VarChar(20) // PASS / FAIL / AB
+  month_year     String?  @db.VarChar(50)
+
+  semester Semester @relation(fields: [semester_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  subject  Subject  @relation(fields: [subject_id], references: [id], onDelete: Restrict)
+
+  @@unique([semester_id, subject_id])
+  @@index([subject_id])
+  @@map("semester_results")
+}
+
+/// Durable, globally-shared rate limiting (works across serverless instances).
+model RateLimitEntry {
+  key         String   @id @db.VarChar(255)
+  windowStart DateTime @db.Timestamp(3)
+  count       Int      @default(1)
+
+  @@index([windowStart])
+  @@map("rate_limit_entries")
+}

@@ -4,6 +4,11 @@ import { QuickSearch } from '@/components/features/home/QuickSearch';
 import { TopPerformers } from '@/components/features/home/TopPerformers';
 import { BranchHighlights } from '@/components/features/home/BranchHighlights';
 import prisma from '@/lib/prisma';
+import { toNumber } from '@/lib/api';
+
+// Data is read live in production (Vercel) — do not statically prerender
+// against a database that may not exist at build time.
+export const dynamic = 'force-dynamic';
 
 async function getHomeStats() {
   try {
@@ -36,10 +41,17 @@ async function getTopPerformersData() {
       orderBy: { sgpa: 'desc' },
       take: 5,
       include: {
-        student: { select: { student_name: true, hall_ticket: true, program: true } },
+        student: { select: { id: true, student_name: true, hall_ticket: true, program: true } },
       },
     });
-    return topSemesters;
+    return topSemesters.map(s => ({
+      id: s.id,
+      student_id: s.student_id,
+      semester_name: s.semester_name,
+      exam_month_year: s.exam_month_year,
+      sgpa: toNumber(s.sgpa),
+      student: s.student,
+    }));
   } catch {
     return [];
   }

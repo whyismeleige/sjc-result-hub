@@ -1,36 +1,27 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# sjc-result-hub · frontend
 
-## Getting Started
+The Next.js application code for SJC Result Hub. See the repository root
+`README.md` for the full project overview, and `../docs/` for the deployment run
+book (`DEPLOYMENT.md`) and the database migration analysis.
 
-First, run the development server:
+## Local development
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```sh
+npm ci
+cp .env.example .env            # DATABASE_URL / DIRECT_URL at minimum
+npx prisma migrate deploy
+npm run dev                     # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Escapes: keep the following in `src/`, outside the Next.js `app/` folder:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- `src/lib/api.ts` — Postgres-backed rate limiting, IP hardening, Zod schemas
+- `src/lib/sgpa.ts`, `src/lib/export-metrics.ts` — pure, unit-tested helpers
+- `src/utils/` — formatting/sanitisation helpers (unit-tested)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Bridge artifacts are gitignored: `../backups/`, `../reports/`, and any local
+`.env*` except the committed `.env.example`.
 
-## Learn More
+## Checks
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`npm run typecheck` · `npm run lint` · `npm test` · `npm run build`
